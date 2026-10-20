@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>地图导航是怎么算出路线的 —— 路径规划算法图解</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav id="nav">
+  <div class="brand">路径导航算法图解</div>
+  <a href="#intro">0. 导读：导航在算什么</a>
+  <a href="#model">1. 道路网 → 带权图</a>
+  <a href="#dijkstra">2. Dijkstra：泛洪</a>
+  <a href="#astar">3. A*：带方向的搜索</a>
+  <a href="#bidir">4. 双向搜索</a>
+  <a href="#alt">5. ALT：地标下界</a>
+  <a href="#ch">6. CH：收缩层次</a>
+  <a href="#traffic">7. 实时路况：时变权重</a>
+  <a href="#compare">8. 对比与真实系统</a>
+  <a href="map.html" style="margin-top:10px;background:#e8f0fe;color:#1a73e8;font-weight:600">🗺️ 地图模式（米兰真实路网）</a>
+  <div class="nav-tip">
+    所有路网画布共用同一张图与同一对起终点：<b>左键</b>点路口设起点，<b>右键</b>设终点；鼠标悬停可看节点的 d、h、f 值。<br><br>
+    颜色：<span style="color:#3b82f6">● 正向已确定</span>　<span style="color:#ef4444">● 反向已确定</span>　○ 在队列中　<span style="color:#facc15">● 当前节点</span>　<span style="color:#f97316">— 正在松弛</span>　<span style="color:#10b981">— 最终路径</span>　<span style="color:#a855f7">┄ 捷径</span>
+  </div>
+</nav>
+
+<main>
+<h1>地图导航是怎么算出路线的？</h1>
+<p class="sub">从 Dijkstra 到工业级的收缩层次（CH）与实时路况：每一步都有动画、公式和可以亲手改的参数。</p>
+<div class="card note" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+  <div style="flex:1;min-width:260px"><b>🗺️ 地图模式：在米兰真实路网上演示</b><br><span class="small muted">类 Google 地图的界面：街道名、建筑、公园与河渠（OpenStreetMap 数据），右键选起终点、路线卡片与替代路线、路况图层、模拟导航；六种算法的搜索过程直接在真实道路上回放。</span></div>
+  <a href="map.html" style="background:#1a73e8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:20px;font-weight:600;white-space:nowrap">打开地图模式 →</a>
+</div>
+
+<!-- ===================================================== 0 导读 -->
+<section id="intro">
+  <h2>0. 导读：导航到底在算什么</h2>
+  <p class="sub">一句话：把道路网变成带权图，在图上求最短路。难的不是"会不会算"，而是"几亿个路口、毫秒内算完、还要考虑此刻的路况"。</p>
+
+  <div class="pipeline">
+    <div class="step"><b>① 地图数据</b><span>测绘 / OpenStreetMap / 众包轨迹</span><em>路段几何、限速、单行、转向限制</em></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>② 建图</b><span>路口 = 节点，路段 = 有向边，边权 = 耗时（或距离、油耗……）</span><em>第 1 节</em></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>③ 离线预处理</b><span>提前算好"捷径"或"地标距离"，用空间换时间</span><em>第 5、6 节</em></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>④ 在线查询</b><span>用户点下"导航"后，毫秒级返回最短路</span><em>第 2～6 节</em></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>⑤ 实时路况 / ETA</b><span>历史车速曲线 + 实时探针 + 预测模型，边权随时间变化</span><em>第 7 节</em></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>⑥ 引导</b><span>把路径压成转向指令、车道级引导、偏航重算</span><em>本页不展开</em></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h4>本页的学习路线（每一步都解决上一步的痛点）</h4>
+      <ol>
+        <li><b>Dijkstra</b>：正确但盲目——像倒水一样向四周均匀泛洪。</li>
+        <li><b>A*</b>：给搜索加"方向感"，用一个不超过真实距离的估计值引导。</li>
+        <li><b>双向搜索</b>：两头同时找，搜索面积减半。</li>
+        <li><b>ALT</b>：用预先算好的地标距离给出更紧的下界，A* 更准。</li>
+        <li><b>收缩层次 CH</b>：预处理出"捷径"，查询时只往"更重要的路"爬——这是开源导航引擎的主力方法，查询只碰几百个节点。</li>
+        <li><b>时变权重</b>：边权是时间的函数，早高峰自动绕开高速。</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h4>为什么非要这么多花样？量级感受一下</h4>
+      <p class="small muted">西欧路网约 1800 万节点、4200 万边，单次点到点查询的典型耗时（数量级，取自 Bast 等人 2016 年综述 <i>Route Planning in Transportation Networks</i>，不同硬件会有差别）：</p>
+      <div class="scale">
+        <div class="row"><span>Dijkstra</span><i style="width:100%"></i><span>≈ 2 s</span></div>
+        <div class="row"><span>双向 Dijkstra</span><i style="width:88%"></i><span>≈ 1 s</span></div>
+        <div class="row"><span>ALT（地标 A*）</span><i style="width:70%"></i><span>≈ 0.1～0.3 s</span></div>
+        <div class="row"><span>CH 收缩层次</span><i style="width:30%"></i><span>≈ 0.1 ms</span></div>
+        <div class="row"><span>Hub Labels</span><i style="width:10%"></i><span>≈ 1 μs</span></div>
+      </div>
+      <p class="small muted">条形为对数刻度示意。Dijkstra 要碰上千万节点；CH 只碰几百个。导航 App 每秒要回答成千上万次查询，2 秒一次根本不可用。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== 1 建模 -->
+<section id="model">
+  <h2>1. 道路网 → 带权图</h2>
+  <p class="sub">所有算法的输入都是同一个东西：一张图。先把"地图"翻译成数学对象。</p>
+
+  <div class="card formula">
+    <h4>定义</h4>
+    $$G=(V,\,E,\,w),\qquad V=\{\text{路口}\},\quad E\subseteq V\times V=\{\text{路段（有向）}\},\quad w:E\to\mathbb{R}_{\ge 0}$$
+    <p>边权是"代价"。导航最常用<b>耗时</b>：路段长度除以可通行速度</p>
+    $$w(e)=\frac{\ell_e}{v_e}\qquad(\ell_e\text{ 为路段长度},\ v_e\text{ 为限速或预计车速})$$
+    <p>一条 \(s\to t\) 的路径 \(P=(s=v_0,v_1,\dots,v_k=t)\) 的代价是边权之和，<b>最短路</b>就是代价最小的那条：</p>
+    $$\operatorname{dist}(s,t)=\min_{P}\ \sum_{i=0}^{k-1} w(v_i,v_{i+1})$$
+    <p>权重非负（\(w\ge 0\)）是后面 Dijkstra 正确性的前提——现实中耗时、距离都天然非负。</p>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h4>经纬度 → 距离：Haversine 公式</h4>
+      <p>路段长度来自地图几何；两个经纬度点 \((\varphi_1,\lambda_1),(\varphi_2,\lambda_2)\) 的大圆距离：</p>
+      $$d = 2R\arcsin\sqrt{\sin^2\!\frac{\varphi_2-\varphi_1}{2}+\cos\varphi_1\cos\varphi_2\sin^2\!\frac{\lambda_2-\lambda_1}{2}}\,,\quad R\approx 6371\ \text{km}$$
+      <div class="hav">
+        <select id="hav-a"></select> → <select id="hav-b"></select>
+      </div>
+      <p id="hav-out" class="small"></p>
+    </div>
+    <div class="card">
+      <h4>现实里还要处理的事（本页做了简化）</h4>
+      <ul>
+        <li><b>单行道</b>：边是有向的。本页为了演示简洁按无向图（双向通行）处理，所有算法在有向图上形式不变。</li>
+        <li><b>转向限制 / 转向代价</b>（禁止左转、掉头耗时）：标准做法是把"路段"当节点、"允许的转向"当边（边图 / line graph），或在搜索状态里带上"从哪条边来"。</li>
+        <li><b>地图匹配</b>：手机 GPS 点并不落在路上，要先用隐马尔可夫模型（HMM）把轨迹"吸附"到最可能的路段序列，再从那个位置出发规划。</li>
+        <li><b>多种代价</b>：最快、最短、少收费、少红绿灯……本质是换一个 \(w\)，或做多目标优化。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>本页使用的模拟路网</h3>
+  <p>22 × 13 的扰动网格，1 像素 = 20 米，三种道路等级；随机删掉约 1/3 的普通路段（始终保持连通）。<b>把鼠标放到路段上</b>看它的长度、限速和耗时权重。</p>
+  <div class="demo">
+    <div><canvas id="model-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="legend" id="model-legend"></div>
+      <div class="stats">
+        <div class="stat"><span>随机种子</span><b id="model-seed"></b></div>
+      </div>
+      <p class="small muted" id="model-info"></p>
+      <button id="model-regen">🎲 重新生成一张路网</button>
+      <p class="small muted">重新生成后，后面所有演示（包括 CH 预处理）都会重置。左键 / 右键点击路口可改起终点。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== 2 Dijkstra -->
+<section id="dijkstra">
+  <h2>2. Dijkstra：向四周"泛洪"</h2>
+  <p class="sub">1959 年的算法，至今仍是一切路径规划的基准与正确性参照。直觉：从起点倒一杯水，水面总是先淹没"离起点最近"的点。</p>
+
+  <div class="grid2">
+    <div class="card formula">
+      <h4>三条公式就是整个算法</h4>
+      <p><b>初始化</b>：起点的暂定距离为 0，其余为无穷大</p>
+      $$d(s)=0,\qquad d(v)=\infty\ \ (v\neq s)$$
+      <p><b>取最小</b>：从未确定的节点集合（优先队列 \(Q\)）里取暂定距离最小的，它的距离从此"板上钉钉"</p>
+      $$u=\arg\min_{v\in Q} d(v)$$
+      <p><b>松弛</b>：看能否借道 \(u\) 让邻居更近</p>
+      $$d(v)\leftarrow\min\big(d(v),\ d(u)+w(u,v)\big)\qquad\forall\,(u,v)\in E$$
+      <p>碰到终点 \(t\) 被取出时即可停止，此时 \(d(t)=\operatorname{dist}(s,t)\)。</p>
+    </div>
+    <div class="card">
+      <h4>为什么"取出来的就是最终答案"</h4>
+      <p>不变式：<b>每当 \(u\) 被取出，\(d(u)=\operatorname{dist}(s,u)\)</b>。</p>
+      <p>反证：若存在更短的 \(s\to u\) 路径，它必须在某处第一次离开"已确定集合"，经过某个未确定节点 \(x\)。因为 \(w\ge 0\)，有 \(\operatorname{dist}(s,x)\le\) 这条路径长 \(&lt; d(u)\)；而 \(x\) 的暂定距离已被它的已确定前驱松弛过，所以 \(d(x)=\operatorname{dist}(s,x)&lt;d(u)\)，与"\(u\) 是队列里最小的"矛盾。</p>
+      <p><b>复杂度</b>（二叉堆）：</p>
+      $$O\big((|V|+|E|)\log|V|\big)$$
+      <p>路网是稀疏图，\(|E|\approx 2.5|V|\)，所以大致是 \(O(|V|\log|V|)\)。问题不在常数，而在它<b>必须把起点周围"一圈"全部搜完</b>——搜索区域面积与 \(\operatorname{dist}(s,t)^2\) 成正比，跨城查询动辄上千万节点。</p>
+    </div>
+  </div>
+
+  <pre class="code"><span class="c">// 伪代码（二叉堆 + 惰性删除）</span>
+d[*] = ∞; d[s] = 0; Q.push(0, s)
+<span class="k">while</span> Q 非空:
+    (key, u) = Q.pop_min()
+    <span class="k">if</span> u 已确定: <span class="k">continue</span>          <span class="c">// 过期堆项</span>
+    标记 u 已确定; <span class="k">if</span> u == t: <span class="k">break</span>
+    <span class="k">for</span> (u, v, w) in 出边(u):
+        <span class="k">if</span> d[u] + w &lt; d[v]: d[v] = d[u] + w; prev[v] = u; Q.push(d[v], v)</pre>
+
+  <div class="demo">
+    <div><canvas id="dj-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="controls" id="dj-controls"></div>
+      <div class="stats" id="dj-stats"></div>
+      <div class="queue"><div class="title">优先队列前 5 项（节点 / 暂定距离 min）</div><div id="dj-queue"></div></div>
+      <div class="log" id="dj-log"></div>
+    </div>
+  </div>
+  <div class="card note">
+    <h4>观察什么</h4>
+    <ul>
+      <li>蓝色"已确定"区域像涟漪一样<b>以起点为中心向外扩</b>，形状是耗时等值线（沿快速路伸得更远），完全<b>不看终点在哪</b>。</li>
+      <li>用"单步"看松弛：橙色 = 这次松弛让邻居更近了（更新并入队），灰色 = 没有更近（不更新）。</li>
+      <li>队列里同一个节点可能有多个过期项，弹出时发现"已确定"就跳过——这就是伪代码里的惰性删除。</li>
+      <li>记住"已确定节点数"这个数字，后面每一节都拿它做对照。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================== 3 A* -->
+<section id="astar">
+  <h2>3. A*：给搜索加上"方向感"</h2>
+  <p class="sub">Dijkstra 只看"已经走了多远"；A* 再加上"估计还要走多远"，优先扩展总估计最小的节点。</p>
+
+  <div class="grid2">
+    <div class="card formula">
+      <h4>核心公式</h4>
+      $$f(v)=\underbrace{g(v)}_{\text{已走：}d(v)}+\underbrace{h(v)}_{\text{估计还要走}}\qquad u=\arg\min_{v\in Q} f(v)$$
+      <p>\(h\) 必须是<b>可采纳的</b>（永远不高估）才能保证最优：</p>
+      $$h(v)\le \operatorname{dist}(v,t)\quad\forall v$$
+      <p>更强的<b>一致性</b>（三角不等式形式）保证每个节点只需取出一次：</p>
+      $$h(u)\le w(u,v)+h(v)\quad\forall (u,v)\in E,\qquad h(t)=0$$
+      <p>耗时权重下最常用的几何启发式：<b>直线距离 ÷ 全网最高限速</b></p>
+      $$h(v)=\frac{\|p_v-p_t\|_2}{v_{\max}}$$
+      <p>任何真实路径都不比直线短、不比最高限速快，所以它永远不高估。</p>
+    </div>
+    <div class="card">
+      <h4>一个漂亮的等价看法</h4>
+      <p>A* 等价于在"改过权重"的图上跑 Dijkstra：</p>
+      $$w'(u,v)=w(u,v)-h(u)+h(v)$$
+      <p>一致性恰好保证 \(w'\ge 0\)；任意 \(s\to t\) 路径的新权重 = 旧权重 \(-\,h(s)+h(t)\)，差一个常数，所以最短路不变。朝终点走的边 \(h\) 下降、\(w'\) 变小，于是搜索"被吸向终点"。</p>
+      <h4 style="margin-top:12px">加权 A*：用最优性换速度</h4>
+      $$f(v)=g(v)+\varepsilon\,h(v),\qquad \varepsilon\ge 1\ \Rightarrow\ \text{路径代价}\le\varepsilon\cdot\operatorname{dist}(s,t)$$
+      <p>\(\varepsilon=0\) 退化成 Dijkstra；\(\varepsilon=1\) 是标准 A*；\(\varepsilon&gt;1\) 更贪心、搜得更少，但可能找到稍长的路（误差有界）。下面的滑块可以亲手试。</p>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div><canvas id="as-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="controls" id="as-controls"></div>
+      <div class="opts">
+        <label>ε <input type="range" id="as-eps" min="0" max="3" step="0.1" value="1"><b id="as-eps-val">1.0</b></label>
+        <label><input type="checkbox" id="as-heat"> 显示 h(v) 热力图（黄 = 离终点近）</label>
+      </div>
+      <div class="stats" id="as-stats"></div>
+      <div class="queue"><div class="title">优先队列前 5 项（节点 / f 值）</div><div id="as-queue"></div></div>
+      <div class="log" id="as-log"></div>
+    </div>
+  </div>
+  <div class="card note">
+    <h4>观察什么</h4>
+    <ul>
+      <li>搜索区域从"圆"变成<b>朝向终点的椭圆</b>，已确定节点数明显少于 Dijkstra。</li>
+      <li>把 ε 拉到 0 → 和第 2 节一模一样；拉到 2～3 → 几乎直奔终点，但看"相对最优"一栏，路径可能变长。</li>
+      <li><b>为什么省得不够多？</b>看统计里的"起点处下界 h(s)"（第 5 节有对照）：直线÷最高限速 远小于真实耗时，因为真实路径大多在 30 km/h 的支路上。下界越松，A* 越接近 Dijkstra。这就是下一步 ALT 要解决的问题。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================== 4 双向 -->
+<section id="bidir">
+  <h2>4. 双向搜索：两头同时找</h2>
+  <p class="sub">从起点正向搜、从终点在反向图上搜，两个"涟漪"在中间相遇。面积与半径平方成正比，两个半径减半的圆加起来只有原来的一半。</p>
+
+  <div class="grid2">
+    <div class="card formula">
+      <h4>公式</h4>
+      <p>正向距离 \(d_f\)（从 \(s\)），反向距离 \(d_b\)（从 \(t\)，沿反向边）。每当某条边 \((u,v)\) 被松弛且 \(v\) 已被另一侧触达，就得到一条完整路径，用它更新上界：</p>
+      $$\mu\leftarrow\min\big(\mu,\ d_f(u)+w(u,v)+d_b(v)\big)$$
+      <p><b>终止条件</b>——两个队列的最小 key 之和已经不小于当前最好答案：</p>
+      $$\min_{v\in Q_f} d_f(v)\;+\;\min_{v\in Q_b} d_b(v)\ \ge\ \mu$$
+      <p>此时任何尚未发现的路径都至少要经过两侧各一个未确定节点，总长 \(\ge\) 左式 \(\ge\mu\)，不可能更短。</p>
+    </div>
+    <div class="card">
+      <h4>一个常见误区</h4>
+      <p>"两边第一次碰到同一个节点就停"是<b>错的</b>。相遇节点 \(v\) 不一定在最短路上——最短路可能经过另一个还在队列里的节点。所以必须维护 \(\mu\) 并用上面的终止条件。演示里能看到：相遇后往往还要再弹出几个节点才满足终止。</p>
+      <h4 style="margin-top:12px">和 A* 结合</h4>
+      <p>可以双向 A*，但两侧的启发式需要"互相一致"（例如用平均化 \(h_f(v)=\tfrac{1}{2}(h(v,t)-h(s,v))\)、\(h_b=-h_f\)）才能保留简单的终止条件。工业实现里更常见的是双向 + 分层（第 6 节）。</p>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div><canvas id="bi-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="controls" id="bi-controls"></div>
+      <div class="stats" id="bi-stats"></div>
+      <div class="log" id="bi-log"></div>
+    </div>
+  </div>
+  <div class="card note">
+    <h4>观察什么</h4>
+    <ul>
+      <li>蓝、红两个区域各自长到一半大小就相遇，总节点数约为 Dijkstra 的 40%～60%。</li>
+      <li>注意"相遇"日志出现后，"终止判定"未必立刻满足——μ 可能还会被更小的候选更新。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================== 5 ALT -->
+<section id="alt">
+  <h2>5. ALT：用地标给出更紧的下界</h2>
+  <p class="sub">A* 的威力取决于 h 有多贴近真实距离。ALT（A*, Landmarks, Triangle inequality）用预先算好的"到几个地标的真实距离"构造下界，在耗时权重下远比直线距离紧。</p>
+
+  <div class="grid2">
+    <div class="card formula">
+      <h4>预处理：选 k 个地标 \(L\)，对每个地标跑一遍全图 Dijkstra，存下 \(\operatorname{dist}(L,v)\) 与 \(\operatorname{dist}(v,L)\)</h4>
+      <p>查询时由三角不等式得到两个下界：</p>
+      $$\operatorname{dist}(v,t)\ \ge\ \operatorname{dist}(L,t)-\operatorname{dist}(L,v),\qquad \operatorname{dist}(v,t)\ \ge\ \operatorname{dist}(v,L)-\operatorname{dist}(t,L)$$
+      <p>取所有地标、两种形式里最大的那个作为启发式：</p>
+      $$h(v)=\max_{L}\ \max\big\{\operatorname{dist}(L,t)-\operatorname{dist}(L,v),\ \operatorname{dist}(v,L)-\operatorname{dist}(t,L)\big\}$$
+      <p>它可采纳且一致（\(\max\) 保持这两个性质）。无向图上两式合并为 \(\big|\operatorname{dist}(L,t)-\operatorname{dist}(L,v)\big|\)。</p>
+      <p><b>空间</b>：\(k\cdot|V|\) 个距离（有向图再乘 2）；\(k=16\) 时全欧洲约几 GB，可接受。</p>
+    </div>
+    <div class="card">
+      <h4>直觉：地标"在终点背后"时下界最紧</h4>
+      <p>若 \(L\) 在 \(t\) 的正后方，\(v\to t\to L\) 近似共线，则 \(\operatorname{dist}(v,L)-\operatorname{dist}(t,L)\approx\operatorname{dist}(v,t)\)，下界几乎等于真值。所以地标要分散在地图<b>边缘</b>：最简单的<b>最远点法</b>——每次挑离现有地标最远的点。更好的 avoid 法会挑"当前下界最差的区域"。</p>
+      <p>本页用最远点法选地标；统计里对比了起点处的 ALT 下界与欧氏下界各占真实耗时的百分比。</p>
+      <h4 style="margin-top:12px">在真实系统里</h4>
+      <p>GraphHopper 的 "LM" 模式就是 ALT；它的优点是<b>权重改了只需重算地标距离</b>（分钟级），比 CH 的预处理灵活，查询则慢一些。</p>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div><canvas id="alt-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="controls" id="alt-controls"></div>
+      <div class="opts">
+        <label>地标数 <select id="alt-k"><option>1</option><option>2</option><option selected>4</option><option>6</option><option>8</option></select></label>
+        <label><input type="checkbox" id="alt-heat"> 显示 h(v) 热力图</label>
+      </div>
+      <div class="stats" id="alt-stats"></div>
+      <div class="log" id="alt-log"></div>
+    </div>
+  </div>
+  <div class="card note">
+    <h4>观察什么</h4>
+    <ul>
+      <li>紫色菱形是地标。打开热力图对比第 3 节：ALT 的 h 沿着<b>道路</b>变化（它来自真实路网距离），欧氏的 h 是同心圆。</li>
+      <li>地标 1 个 → 8 个，已确定节点数如何变化？多到一定程度收益递减，但每次查询计算 h 的代价线性增长。</li>
+      <li>试着把终点放到地标附近 / 远离所有地标，看下界占比的变化。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================== 6 CH -->
+<section id="ch">
+  <h2>6. 收缩层次（Contraction Hierarchies）：预处理出"捷径"</h2>
+  <p class="sub">2008 年 Geisberger 等人提出，OSRM、GraphHopper 等开源导航引擎的默认算法。思想来自一个常识：<b>远途路线几乎总是"先上主路、走高速、再下到支路"</b>——路网是有层次的。</p>
+
+  <div class="card">
+    <h4>两阶段</h4>
+    <div class="kv">
+      <b>预处理（离线，分钟级）</b><span>给所有节点排一个"重要性"顺序，从最不重要的开始逐个<b>收缩</b>：把它从图里拿掉，若这破坏了某两个邻居之间的最短距离，就在它们之间补一条<b>捷径</b>边。</span>
+      <b>查询（在线，亚毫秒）</b><span>双向 Dijkstra，但<b>只允许走向更重要（更晚收缩）的节点</b>。两侧在"高处"相遇，再把路径里的捷径递归展开成真实路段。</span>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card formula">
+      <h4>收缩一个节点 \(v\)</h4>
+      <p>对 \(v\) 的每一对（尚未收缩的）邻居 \(u,w\)，比较"经过 \(v\)"与"不经过 \(v\)"的最短距离：</p>
+      $$\text{若}\quad \operatorname{dist}_{G\setminus\{v\}}(u,w)\ &gt;\ w(u,v)+w(v,w)\quad\text{则加捷径}\ (u,w),\ \ w(u,w)=w(u,v)+w(v,w)$$
+      <p>左边的"不经 \(v\) 的最短路"叫<b>见证路径</b>（witness），用一个范围很小的局部 Dijkstra 搜（搜不到就保守地加捷径——只会多加，不会错）。</p>
+      <h4>节点顺序：边差（edge difference）</h4>
+      $$ED(v)=\#\text{需加的捷径}-\#\text{与 }v\text{ 相连的边}$$
+      <p>优先收缩 ED 小的（拿掉它"图变简单"），再加上"已收缩邻居数"等项让收缩在空间上均匀展开。顺序用惰性更新的优先队列维护：弹出后重算优先级，若已不是最小就放回去。</p>
+    </div>
+    <div class="card formula">
+      <h4>查询：只向上</h4>
+      <p>记 \(\pi(v)\) 为 \(v\) 的收缩次序（rank，越晚收缩越大）。向上图：</p>
+      $$G^{\uparrow}=\{(u,v)\in E\cup S:\ \pi(u)&lt;\pi(v)\}\qquad(S=\text{捷径集})$$
+      <p>正向在 \(G^{\uparrow}\) 上从 \(s\) 搜，反向也在 \(G^{\uparrow}\) 上从 \(t\) 搜（有向图时用反向边）：</p>
+      $$\mu=\min_{v}\ d_f^{\uparrow}(v)+d_b^{\uparrow}(v)$$
+      <p>某一侧队首 key \(\ge\mu\) 时该侧停止。</p>
+      <h4>为什么不会漏掉最短路</h4>
+      <p>定理：任意最短路都能表示成一条<b>先上升后下降</b>的路径（中间可含捷径）。归纳：取最短路上 rank 最低的内部节点 \(v\)，它被收缩时要么它两侧邻居间有不经过它的等长见证路径（可替换），要么已经加了捷径——两种情况都能把 \(v\) 从路径里消掉而不变长。反复消掉局部最低点，剩下的就是单峰的上-下路径。</p>
+    </div>
+  </div>
+
+  <h3>6.1 八个节点的玩具图：一步一步看收缩与查询</h3>
+  <p>边上的数字是权重。橙色 = 正在考察的"经过 v"的两段，绿色 = 找到的见证路径，紫色虚线 = 捷径（数字是它的权重），节点右上角 r 为 rank。查询阶段蓝 = 正向已确定，红 = 反向已确定，紫 = 两侧都确定。</p>
+  <div class="demo">
+    <div><canvas id="toy-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="controls">
+        <button id="toy-prev">◀ 上一步</button>
+        <button id="toy-next" class="primary">下一步 ▶</button>
+        <button id="toy-auto">▶ 自动播放</button>
+        <button id="toy-jump">跳到查询阶段</button>
+        <button id="toy-restart">↺ 重来</button>
+      </div>
+      <div><span class="badge pre" id="toy-phase"></span> <span class="muted small">第 <span id="toy-step"></span> 步</span></div>
+      <div class="toy-text" id="toy-text"></div>
+    </div>
+  </div>
+
+  <h3>6.2 在整张路网上：先预处理，再查询</h3>
+  <div class="demo">
+    <div><canvas id="ch-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="phase" id="ch-phase"></div>
+      <div class="muted small">阶段 1 · 预处理（与起终点无关，只做一次）</div>
+      <div class="controls" id="ch-pre-controls"></div>
+      <div class="muted small">阶段 2 · 查询（改起终点后只需重跑这一步）</div>
+      <div class="controls" id="ch-q-controls"></div>
+      <div class="stats" id="ch-stats"></div>
+      <div class="log" id="ch-log"></div>
+    </div>
+  </div>
+  <div class="card note">
+    <h4>观察什么</h4>
+    <ul>
+      <li>预处理动画里，<b>支路上的节点先被收缩</b>（ED 低），快速路上的节点最后才收缩——"重要性"顺序是算法自己从结构里学出来的，没有人工标注道路等级。</li>
+      <li>查询阶段节点半径 ∝ rank。两侧搜索都"向上爬"，确定的节点数只有 Dijkstra 的一小部分；绿色虚线弧是路径里的捷径，日志里能看到它们被逐条展开。</li>
+      <li>换一对起终点再查：预处理不用重做——这正是 CH 的价值，也是它的软肋：<b>边权一变（比如实时路况），捷径就可能失效</b>，需要重新预处理。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>同一家族的其他工业方法（了解名字即可）</h4>
+    <ul>
+      <li><b>CRP / Customizable Route Planning</b>（Delling 等，微软）：把路网多级分区，预处理只依赖拓扑；换一套权重（路况、车型）只需几秒"定制"。Bing Maps 与 OSRM 的 MLD 模式用它。适合权重经常变的场景。</li>
+      <li><b>Hub Labeling</b>：给每个节点存一张"枢纽标签"表，查询只是两张表的合并，微秒级，但空间大。</li>
+      <li><b>Transit Node Routing</b>：长途查询只经过少数"中转节点"，查表即可；短途回退到 CH。</li>
+      <li>Google Maps 没有公开其引擎细节；从公开资料看，它同样属于"分层/分区预处理 + 双向查询"这一族，再叠加实时路况与机器学习的 ETA 预测（见下一节）。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================== 7 时变 -->
+<section id="traffic">
+  <h2>7. 实时路况：边权是时间的函数</h2>
+  <p class="sub">早高峰的高速可能比支路还慢。导航系统把每条路段的车速做成一天内的曲线（历史统计 + 实时探针 + 预测），路径规划变成"时变最短路"。</p>
+
+  <div class="grid2">
+    <div class="card formula">
+      <h4>时变最短路</h4>
+      <p>边权依赖于<b>进入该边的时刻</b> \(\tau\)：</p>
+      $$w_e(\tau)=\frac{\ell_e}{v_e(\tau)}$$
+      <p>标签改为"到达时刻"，松弛时按到达 \(u\) 的时刻取权重（出发时刻 \(\tau_0\)）：</p>
+      $$a(s)=\tau_0,\qquad a(v)\leftarrow\min\big(a(v),\ a(u)+w_{uv}(a(u))\big)$$
+      <p>只要满足 <b>FIFO 性质</b>（先出发不会后到达，即"在路上等一等"没有好处）：</p>
+      $$\tau_1\le\tau_2\ \Rightarrow\ \tau_1+w_e(\tau_1)\ \le\ \tau_2+w_e(\tau_2)$$
+      <p>Dijkstra 的"取出即最终"不变式仍然成立，算法可以原样使用。本页的速度曲线变化平缓，满足 FIFO（等价于 \(w_e'(\tau)\ge -1\)）。</p>
+    </div>
+    <div class="card">
+      <h4>数据从哪来，ETA 怎么算</h4>
+      <ul>
+        <li><b>历史曲线</b>：按星期几、每 5～15 分钟一档，统计每条路段的典型车速。</li>
+        <li><b>实时探针</b>：开着导航的手机匿名上报位置，推算当前车速，覆盖最近几分钟。</li>
+        <li><b>预测</b>：你 40 分钟后才到的那段路，要用的是 40 分钟后的车速。Google Maps 与 DeepMind 在 2020 年公开过用图神经网络（GNN）预测路段未来车速，将 ETA 误差降低了数十个百分点。</li>
+        <li><b>与预处理结合</b>：CH 需要固定权重，所以实际系统要么做时变 CH（TCH），要么用 CRP 这类"秒级定制"的方法，要么用静态层次做候选、再用时变权重重估。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div><canvas id="td-canvas"></canvas></div>
+    <div class="demo-side">
+      <div class="opts" style="flex-direction:column;align-items:stretch">
+        <label>出发时刻 <input type="range" id="td-time" min="0" max="23.75" step="0.25" value="8.5" style="flex:1"><b id="td-time-val"></b></label>
+      </div>
+      <canvas id="td-chart" style="width:100%;height:auto;aspect-ratio:420/150;cursor:default"></canvas>
+      <div class="stats" id="td-stats"></div>
+      <p class="small muted">路段颜色：黄→红 = 此刻越堵（倍率 m 越小）；绿 = 该时刻的时变最短路；灰虚线 = 畅通时的最短路（若两者不同）。悬停路段看此刻耗时。</p>
+    </div>
+  </div>
+  <div class="card note">
+    <h4>观察什么</h4>
+    <ul>
+      <li>把滑块拖过 8:30 / 18:00：快速路变红，绿色路线<b>离开快速路、改走支路</b>；拖到深夜，又回到快速路。</li>
+      <li>"畅通最短路此刻实际耗时"减去"时变最短路"就是改道省下的时间——这正是实时导航的价值。</li>
+      <li>注意算法并没有变，变的只是权重函数：这就是把"建模"和"算法"分开的好处。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================== 8 对比 -->
+<section id="compare">
+  <h2>8. 同一查询，五种算法的搜索量</h2>
+  <p class="sub">在当前的起终点上把前面所有算法各跑一遍（不做动画），比较它们"确定"了多少节点。</p>
+  <button id="cmp-run" class="primary">▶ 在当前起终点上运行全部算法</button>
+  <div id="cmp-table"></div>
+
+  <h3>真实系统用的是什么</h3>
+  <table>
+    <thead><tr><th>系统</th><th>路径算法</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>OSRM（开源）</td><td>CH；或 MLD（多级 Dijkstra，CRP 的实现）</td><td>CH 查询最快；MLD 便于频繁更新权重</td></tr>
+      <tr><td>GraphHopper（开源）</td><td>CH；或 LM（ALT）；或纯双向 A*</td><td>三种模式按"速度 vs 灵活性"取舍</td></tr>
+      <tr><td>Valhalla（开源，Mapbox 起源）</td><td>双向 A* + 分级瓦片</td><td>不做全局预处理，灵活支持多种出行方式与动态代价</td></tr>
+      <tr><td>Bing Maps</td><td>CRP</td><td>方法的提出者即微软研究院</td></tr>
+      <tr><td>Google Maps</td><td>未公开；属于分层预处理 + 双向查询一族</td><td>公开的部分主要在 ETA 预测（GNN）与路况数据</td></tr>
+    </tbody>
+  </table>
+
+  <div class="card">
+    <h4>继续深入可以看的方向</h4>
+    <ul>
+      <li><b>替代路线</b>：找几条"足够不同又足够短"的路（plateau 法、惩罚法）。</li>
+      <li><b>多目标</b>：时间 / 距离 / 过路费的帕累托最短路；或把它们线性加权成一个 \(w\)。</li>
+      <li><b>公共交通</b>：时刻表不是图上的静态边，用 RAPTOR、Connection Scan 这类专门算法。</li>
+      <li><b>偏航重算</b>：离开路线后要在几十毫秒内重算——又是 CH 这类亚毫秒查询的用武之地。</li>
+      <li><b>经典文献</b>：Dijkstra 1959；Hart–Nilsson–Raphael 1968（A*）；Goldberg–Harrelson 2005（ALT）；Geisberger 等 2008（CH）；Delling 等 2011（CRP）；Bast 等 2016 综述。</li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/auto-render.min.js"></script>
+<script src="js/core.js"></script>
+<script src="js/algos.js"></script>
+<script src="js/ch.js"></script>
+<script src="js/viz.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

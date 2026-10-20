@@ -1,0 +1,6 @@
+# Overpass 原始下载（可用 tools/fetch_osm.sh 重新获取，约 22 MB）
+data/raw/
+*.log
+node_modules/
+.DS_Store
+Thumbs.db

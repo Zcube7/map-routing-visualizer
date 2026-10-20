@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>导航演示 · 米兰 —— 路径算法在真实路网上</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="description" content="在米兰真实路网上可视化地图导航算法：Dijkstra、A*、双向搜索、ALT、收缩层次（CH）、时变路况。类 Google 地图界面，纯前端离线运行。">
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="map.css">
+</head>
+<body>
+<canvas id="map"></canvas>
+
+<!-- 左侧：路线面板 -->
+<div id="panel">
+  <div class="modes">
+    <button class="on" title="驾车"><svg viewBox="0 0 24 24"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>驾车</button>
+    <button disabled title="公共交通（本演示未实现）"><svg viewBox="0 0 24 24"><path d="M12 2c-4 0-8 .5-8 4v9.5C4 17.43 5.57 19 7.5 19L6 20.5v.5h2.23l2-2H14l2 2h2v-.5L16.5 19c1.93 0 3.5-1.57 3.5-3.5V6c0-3.5-3.58-4-8-4zM7.5 17c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm3.5-6H6V6h5v5zm5.5 6c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm1.5-6h-5V6h5v5z"/></svg>公交</button>
+    <button disabled title="步行（本演示未实现）"><svg viewBox="0 0 24 24"><path d="M13.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2v-7.5l-2.1-2 .6-3C14.8 12 16.8 13 19 13v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6 8.3V13h2V9.6l1.8-.7"/></svg>步行</button>
+    <button disabled title="骑行（本演示未实现）"><svg viewBox="0 0 24 24"><path d="M15.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM5 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5 3.5 1.6 3.5 3.5-1.6 3.5-3.5 3.5zm5.8-10l2.4-2.4.8.8c1.3 1.3 3 2.1 5.1 2.1V9c-1.5 0-2.7-.6-3.6-1.5l-1.9-1.9c-.5-.4-1-.6-1.6-.6s-1.1.2-1.4.6L7.8 8.4c-.4.4-.6.9-.6 1.4 0 .6.2 1.1.6 1.4L11 14v5h2v-6.2l-2.2-2.3zM19 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5 3.5 1.6 3.5 3.5-1.6 3.5-3.5 3.5z"/></svg>骑行</button>
+  </div>
+  <div class="inputs">
+    <div class="ico"><div class="dot"></div></div>
+    <div class="field"><input id="inA" placeholder="选择起点，或在地图上右键"><div id="sgA" class="sugg hidden"></div></div>
+    <button class="swap" id="swap" title="交换起点和终点"><svg viewBox="0 0 24 24"><path d="M16 17.01V10h-2v7.01h-3L15 21l4-3.99h-3zM9 3L5 6.99h3V14h2V6.99h3L9 3z"/></svg></button>
+    <div class="ico"><div class="pin"></div></div>
+    <div class="field"><input id="inB" placeholder="选择目的地"><div id="sgB" class="sugg hidden"></div></div>
+  </div>
+  <div class="options"><span class="chip on" id="departchip">立即出发</span><span>驾车 · 按市区典型车速估算，忽略单行道</span></div>
+  <div class="scroll" id="routes"></div>
+  <div class="panel-foot">城市：<b id="cityname"></b> · 地图数据 © OpenStreetMap 贡献者 · 本页是算法教学演示，界面风格仿 Google 地图，并非 Google 产品。<a href="index.html">返回教程</a></div>
+</div>
+
+<!-- 右侧：算法卡片 -->
+<div id="algo">
+  <div class="head"><div>路径算法 <span class="sub">· 在真实路网上回放搜索过程</span></div></div>
+  <div class="chips" id="chips">
+    <span class="chip on" data-a="dijkstra">Dijkstra</span><span class="chip" data-a="astar">A*</span><span class="chip" data-a="bidir">双向</span><span class="chip" data-a="alt">ALT 地标</span><span class="chip" data-a="ch">CH 收缩层次</span><span class="chip" data-a="td">时变路况</span>
+  </div>
+  <div class="msg" id="algomsg"></div>
+  <div class="progress hidden" id="chprog"><i></i></div>
+  <div class="ctrl">
+    <button id="b-play" class="primary">▶ 回放</button><button id="b-pause">⏸</button><button id="b-step">单步</button><button id="b-end">⏩ 直接出结果</button><button id="b-reset">↺</button>
+    <label class="speed">速度 <input type="range" id="speed" min="0" max="100" value="68"><span id="speedv"></span></label>
+    <label class="hour hidden" id="hourrow">出发时刻 <input type="range" id="hour" min="0" max="23.75" step="0.25" value="8.5"><b id="hourv"></b></label>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="log" id="algolog"></div>
+  <div class="legend"><span><i style="background:#1a73e8"></i>正向已探索</span><span><i style="background:#d93025"></i>反向已探索</span><span><i style="background:#f29900"></i>正在松弛</span><span><i style="background:#4285f4;height:5px"></i>最终路线</span><span><i style="background:#a142f4"></i>捷径</span></div>
+  <details open><summary>原理与公式</summary><div class="principle" id="principle"></div></details>
+</div>
+
+<div id="toplinks" class="mapctl"><a href="index.html" title="回到逐节讲解的教程页">📘 教程页</a></div>
+<div id="layers" class="mapctl"><span class="lt">图层</span><label><input type="checkbox" id="ly-traffic"> 路况</label><label><input type="checkbox" id="ly-buildings" checked> 建筑</label><label><input type="checkbox" id="ly-labels" checked> 路名</label></div>
+<div id="zoomctl" class="mapctl"><button id="zin" title="放大">+</button><button id="zout" title="缩小">−</button></div>
+<div id="homectl" class="mapctl"><button id="home" title="回到全城视图"><svg viewBox="0 0 24 24"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3c-.46-4.17-3.77-7.48-7.94-7.94V1h-2v2.06C6.83 3.52 3.52 6.83 3.06 11H1v2h2.06c.46 4.17 3.77 7.48 7.94 7.94V23h2v-2.06c4.17-.46 7.48-3.77 7.94-7.94H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg></button></div>
+<div id="scalebar" class="mapctl"></div>
+<div id="attrib" class="mapctl">地图数据 © OpenStreetMap 贡献者（ODbL）· 渲染与路线算法均在本页浏览器内完成</div>
+<div id="navbar" class="hidden"></div>
+<div id="ctxmenu" class="hidden"></div>
+<div id="tip" class="hidden"></div>
+<div id="loading"><div class="spinner"></div><div>正在加载米兰路网…</div></div>
+
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/auto-render.min.js"></script>
+<script src="data/milan.js"></script>
+<script src="js/core.js"></script>
+<script src="js/algos.js"></script>
+<script src="js/ch.js"></script>
+<script src="js/viz.js"></script>
+<script src="js/map/citygraph.js"></script>
+<script src="js/map/maprender.js"></script>
+<script src="js/map/mapapp.js"></script>
+</body>
+</html>

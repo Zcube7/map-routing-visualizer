@@ -1,0 +1,16 @@
+{
+  "name": "map-routing-visualizer",
+  "version": "1.0.0",
+  "description": "Interactive visualization of map navigation algorithms (Dijkstra, A*, bidirectional, ALT, Contraction Hierarchies, time-dependent) on a real OpenStreetMap road network, with a Google-Maps-style UI. Pure front-end, works offline.",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node test/check.js",
+    "serve": "python -m http.server 8765",
+    "build:city": "python -I tools/build_city.py data/raw data/milan.js Milano"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Zcube7/map-routing-visualizer"
+  }
+}
