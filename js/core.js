@@ -142,6 +142,21 @@ function buildRoadNetwork(seed) {
   return { nodes, edges, adj, cols, rows, W, H, hwRow, hwCol, seed };
 }
 
+/* 比较两个数时需要显示的小数位数：避免四舍五入后出现 "3.1 < 3.1" 这类看起来矛盾的日志 */
+function cmpDecimals(a, b, min = 1, max = 4) {
+  if (!isFinite(a) || !isFinite(b)) return min;
+  for (let d = min; d < max; d++) if (a.toFixed(d) !== b.toFixed(d) || Math.abs(a - b) < 1e-9) return d;
+  return max;
+}
+/* 显示 "a + b = c" 时需要的小数位数：保证显示出来的两个加数相加确实等于显示出来的和（避免 3.7 + 1.7 = 5.5） */
+function sumDecimals(a, b, min = 1, max = 4) {
+  if (!isFinite(a) || !isFinite(b)) return min;
+  for (let d = min; d < max; d++) if ((Number(a.toFixed(d)) + Number(b.toFixed(d))).toFixed(d) === (a + b).toFixed(d)) return d;
+  return max;
+}
+/* 同一条日志里既有加法又有比较：取两者需要的最大位数 */
+function logDecimals(sumA, sumB, cmpA, cmpB) { return Math.max(sumDecimals(sumA, sumB), cmpDecimals(cmpA, cmpB)); }
+
 /* ---------- 几何 / 工具 ---------- */
 function nodeDistPx(g, a, b) {
   const A = g.nodes[a], B = g.nodes[b];

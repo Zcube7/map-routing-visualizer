@@ -113,7 +113,8 @@ class CH {
     const Hs = [new MinHeap(), new MinHeap()];
     d[0][s] = 0; Hs[0].push(0, s);
     d[1][t] = 0; Hs[1].push(0, t);
-    let mu = Infinity, meet = -1, nS = 0, nR = 0, side = 1;
+    const seen = new Uint8Array(n);
+    let mu = Infinity, meet = -1, nS = 0, nU = 0, nR = 0, side = 1;
     const stopped = [false, false];
     yield { type: 'init', s, t };
     while (!(stopped[0] && stopped[1])) {
@@ -122,17 +123,18 @@ class CH {
       const H = Hs[side], ds = d[side], dother = d[1 - side], pv = prev[side], st = set[side];
       if (!H.size || H.peekKey() >= mu) {
         stopped[side] = true;
-        yield { type: 'stopside', side, top: H.peekKey(), mu, nS, nR };
+        yield { type: 'stopside', side, top: H.peekKey(), mu, nS, nU, nR };
         continue;
       }
       const { val: u } = H.pop();
       if (st[u]) continue;
       st[u] = 1; nS++;
+      if (!seen[u]) { seen[u] = 1; nU++; }
       if (dother[u] < Infinity) {
         const cand = ds[u] + dother[u];
-        if (cand < mu) { mu = cand; meet = u; yield { type: 'meet', u, mu, dF: d[0][u], dB: d[1][u], nS, nR }; }
+        if (cand < mu) { mu = cand; meet = u; yield { type: 'meet', u, mu, dF: d[0][u], dB: d[1][u], nS, nU, nR }; }
       }
-      yield { type: 'settle', side, u, d: ds[u], rank: this.rank[u], qsize: H.size, qtop: H.top(5), nS, nR, mu, topF: Hs[0].peekKey(), topB: Hs[1].peekKey() };
+      yield { type: 'settle', side, u, d: ds[u], rank: this.rank[u], qsize: H.size, qtop: H.top(5), nS, nU, nR, mu, topF: Hs[0].peekKey(), topB: Hs[1].peekKey() };
       for (const [v, ed] of this.adj[u]) {
         if (this.rank[v] < this.rank[u]) continue;      // 只走向上的边
         if (st[v]) continue;
@@ -143,11 +145,11 @@ class CH {
         yield { type: 'relax', side, u, v, du: ds[u], w: ed.w, nd, old, improved, isShortcut: ed.mid >= 0, nS, nR };
       }
     }
-    if (meet < 0) { yield { type: 'done', path: [], cost: Infinity, nS, nR }; return; }
+    if (meet < 0) { yield { type: 'done', path: [], cost: Infinity, nS, nU, nR }; return; }
     const left = buildPath(prev[0], s, meet);
     const right = buildPath(prev[1], t, meet).reverse();
     const chPath = left.concat(right.slice(1));
-    yield { type: 'chpath', path: chPath.slice(), cost: mu, meet, nS, nR };
+    yield { type: 'chpath', path: chPath.slice(), cost: mu, meet, nS, nU, nR };
     /* 逐步展开捷径：每次把第一条捷径边替换成两段 */
     const path = chPath.slice();
     for (;;) {
@@ -158,9 +160,9 @@ class CH {
       }
       if (idx < 0) break;
       path.splice(idx + 1, 0, mid);
-      yield { type: 'unpack', path: path.slice(), a: path[idx], b: path[idx + 2], mid, nS, nR };
+      yield { type: 'unpack', path: path.slice(), a: path[idx], b: path[idx + 2], mid, nS, nU, nR };
     }
-    yield { type: 'done', path, cost: mu, nS, nR, meet };
+    yield { type: 'done', path, cost: mu, nS, nU, nR, meet };
   }
 }
 
@@ -220,7 +222,10 @@ function toyCHFrames(g, s, t) {
           push(`找到见证路径 ${wp.map(L).join('→')}，长 ${d} ≤ ${via}。说明去掉 ${L(v)} 不影响 ${L(u)}–${L(w)} 的最短距离，不加捷径。`, { node: v, via: [[u, v], [v, w]], witness: wp });
         } else {
           ch._setEdge(u, w, via, v);
-          frames.push({ text: `不经 ${L(v)} 的最短路长 ${d === Infinity ? '∞（不连通）' : d} > ${via}。必须加捷径 (${L(u)}, ${L(w)})，权重 ${via}，并记住它的中间点 ${L(v)}，查询后才能还原成真实路径。`, hl: { node: v, via: [[u, v], [v, w]], witness: wp, newShortcut: [u, w] }, phase: 'pre', snap: snap() });
+          frames.push({ text: d === Infinity
+            ? `在"去掉 ${L(v)}"的图里，限定范围内（只搜长度 ≤ ${via} 的路径，最多确定 ${ch.witnessLimit} 个节点）没有找到 ${L(u)} 到 ${L(w)} 的见证路径——可能真的不连通，也可能只是绕路太长。保守起见加捷径 (${L(u)}, ${L(w)})，权重 ${via}，并记住中间点 ${L(v)} 以便还原。多加捷径不影响正确性，只多占一点空间。`
+            : `不经 ${L(v)} 的最短路长 ${d} > ${via}。必须加捷径 (${L(u)}, ${L(w)})，权重 ${via}，并记住它的中间点 ${L(v)}，查询后才能还原成真实路径。`,
+            hl: { node: v, via: [[u, v], [v, w]], witness: wp, newShortcut: [u, w] }, phase: 'pre', snap: snap() });
         }
       }
     }

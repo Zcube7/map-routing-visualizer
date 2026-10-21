@@ -5,7 +5,9 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "test": "node test/check.js",
+    "test": "node test/check.js && node test/browser.js",
+    "test:unit": "node test/check.js",
+    "test:browser": "node test/browser.js",
     "serve": "python -m http.server 8765",
     "build:city": "python -I tools/build_city.py data/raw data/milan.js Milano"
   },

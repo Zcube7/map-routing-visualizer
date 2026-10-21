@@ -22,7 +22,7 @@ function* dijkstraGen(g, s, t, opts = {}) {
     const { key, val: u } = H.pop();
     if (settled[u]) continue;           // 过期的堆项（惰性删除）
     settled[u] = 1; nS++;
-    yield { type: 'settle', side: 0, u, d: dist[u], key, qsize: H.size, qtop: H.top(5), nS, nR };
+    yield { type: 'settle', side: 0, u, d: dist[u], key, qsize: H.size, qtop: H.top(5), nS, nU: nS, nR };
     if (u === t) break;
     for (const e of g.adj[u]) {
       const v = e.to;
@@ -37,7 +37,7 @@ function* dijkstraGen(g, s, t, opts = {}) {
     }
   }
   const path = buildPath(prev, s, t);
-  yield { type: 'done', path, cost: dist[t], nS, nR, dist, settled };
+  yield { type: 'done', path, cost: dist[t], nS, nU: nS, nR, dist, settled };
 }
 
 /* 普通 Dijkstra 跑到底：返回全图距离数组（供地标预处理用） */
@@ -75,11 +75,12 @@ function* bidirGen(g, s, t) {
   const Hs = [new MinHeap(), new MinHeap()];
   d[0][s] = 0; Hs[0].push(0, s);
   d[1][t] = 0; Hs[1].push(0, t);
-  let mu = Infinity, meet = -1, nS = 0, nR = 0, side = 1;
+  const seen = new Uint8Array(n);        // 被任一方向确定过 → 唯一访问路口数
+  let mu = Infinity, meet = -1, nS = 0, nU = 0, nR = 0, side = 1;
   yield { type: 'init', s, t };
   for (;;) {
     const topF = Hs[0].peekKey(), topB = Hs[1].peekKey();
-    if (topF + topB >= mu) { yield { type: 'stop', topF, topB, mu, nS, nR }; break; }
+    if (topF + topB >= mu) { yield { type: 'stop', topF, topB, mu, nS, nU, nR }; break; }
     side = 1 - side;
     if (!Hs[side].size) side = 1 - side;
     if (!Hs[side].size) break;
@@ -87,7 +88,12 @@ function* bidirGen(g, s, t) {
     const { val: u } = H.pop();
     if (st[u]) continue;
     st[u] = 1; nS++;
-    yield { type: 'settle', side, u, d: ds[u], qsize: H.size, qtop: H.top(5), nS, nR, mu, topF: Hs[0].peekKey(), topB: Hs[1].peekKey() };
+    if (!seen[u]) { seen[u] = 1; nU++; }
+    if (dother[u] < Infinity) {           // 另一侧已触达本节点（含 s===t 的情形）
+      const cand = ds[u] + dother[u];
+      if (cand < mu) { mu = cand; meet = u; yield { type: 'meet', u, mu, dF: d[0][u], dB: d[1][u], nS, nU, nR, onSettle: true }; }
+    }
+    yield { type: 'settle', side, u, d: ds[u], qsize: H.size, qtop: H.top(5), nS, nU, nR, mu, topF: Hs[0].peekKey(), topB: Hs[1].peekKey() };
     for (const e of g.adj[u]) {
       const v = e.to;
       if (st[v]) continue;
@@ -100,7 +106,7 @@ function* bidirGen(g, s, t) {
         const cand = nd + dother[v];
         if (cand < mu) {
           mu = cand; meet = v;
-          yield { type: 'meet', u: v, mu, dF: d[0][v], dB: d[1][v], nS, nR };
+          yield { type: 'meet', u: v, mu, dF: d[0][v], dB: d[1][v], nS, nU, nR };
         }
       }
     }
@@ -111,7 +117,7 @@ function* bidirGen(g, s, t) {
     const right = buildPath(prev[1], t, meet).reverse();
     path = left.concat(right.slice(1));
   }
-  yield { type: 'done', path, cost: mu, nS, nR, meet, distF: d[0], distB: d[1] };
+  yield { type: 'done', path, cost: mu, nS, nU, nR, meet, distF: d[0], distB: d[1] };
 }
 
 /* ---------- ALT：地标选择（最远点法）与三角不等式下界 ---------- */
@@ -140,7 +146,7 @@ function altHeuristic(alt, t) {
     let h = 0;
     for (const dl of dists) {
       const x = Math.abs(dl[t] - dl[v]);
-      if (x > h) h = x;
+      if (x > h && isFinite(x)) h = x;      // 不连通的地标给 ∞−∞=NaN，视为无信息
     }
     return h;
   };
@@ -179,7 +185,7 @@ function* tdDijkstraGen(g, s, t, departHour) {
     const { val: u } = H.pop();
     if (settled[u]) continue;
     settled[u] = 1; nS++;
-    yield { type: 'settle', side: 0, u, d: arr[u], qsize: H.size, qtop: H.top(5), nS, nR };
+    yield { type: 'settle', side: 0, u, d: arr[u], qsize: H.size, qtop: H.top(5), nS, nU: nS, nR };
     if (u === t) break;
     const tau = departHour + arr[u] / 60;
     for (const e of g.adj[u]) {
@@ -192,7 +198,7 @@ function* tdDijkstraGen(g, s, t, departHour) {
       yield { type: 'relax', side: 0, u, v, du: arr[u], w, nd, old, improved, tau, nS, nR };
     }
   }
-  yield { type: 'done', path: buildPath(prev, s, t), cost: arr[t], nS, nR };
+  yield { type: 'done', path: buildPath(prev, s, t), cost: arr[t], nS, nU: nS, nR };
 }
 /* 时变 Dijkstra：标签是“到达时刻”，权重在松弛时按到达 u 的时刻取值 */
 function tdDijkstra(g, s, t, departHour) {

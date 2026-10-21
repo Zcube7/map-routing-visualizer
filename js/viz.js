@@ -316,7 +316,7 @@ class Player {
       const dt = Math.min(0.5, (now - this._last) / 1000); this._last = now;
       this._acc += dt * this.speed;
       let k = Math.min(20000, Math.floor(this._acc)); this._acc -= k;
-      while (k-- > 0) if (!this.step()) break;
+      while (k-- > 0 && this.playing) if (!this.step()) break;   // 事件回调里可能 pause()（引导案例的断点）
       if (this.onFrame) this.onFrame();
       if (this.playing) this._raf = requestAnimationFrame(loop);
     };

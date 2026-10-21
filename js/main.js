@@ -111,26 +111,33 @@ class SearchDemo {
         break;
       case 'settle':
         st.side[ev.u] = ev.side + 1; st.inQ[ev.u] = 0; st.current = ev.u; st.dist[ev.side][ev.u] = ev.d;
-        st.nS = ev.nS; st.nR = ev.nR; st.qsize = ev.qsize; st.qtop = ev.qtop || [];
+        st.nS = ev.nS; st.nU = ev.nU; st.nR = ev.nR; st.qsize = ev.qsize; st.qtop = ev.qtop || [];
         if (ev.mu != null) { st.mu = ev.mu; st.topF = ev.topF; st.topB = ev.topB; }
         this.addLog(`${bi ? SIDE_NAME[ev.side] : ''}弹出队首 u=#${ev.u}，d(u)=${fmt(ev.d)} min${this.h && ev.key != null ? `（f(u)=${fmt(ev.key)}）` : ''}，标记为已确定；队列剩 ${ev.qsize} 项。`);
         break;
-      case 'relax':
+      case 'relax': {
         st.current = ev.u; st.hlEdge = { u: ev.u, v: ev.v, improved: ev.improved }; st.nR = ev.nR;
         if (ev.improved) { st.inQ[ev.v] = ev.side + 1; st.dist[ev.side][ev.v] = ev.nd; }
-        this.addLog(`松弛 (#${ev.u}→#${ev.v})：${fmt(ev.du)} + ${fmt(ev.w)} = ${fmt(ev.nd)} ${ev.improved ? `&lt; ${fmt(ev.old)} ⇒ 更新 d(v)，入队` : `≥ ${fmt(ev.old)} ⇒ 不更新`}${this.h && ev.improved ? `；f(v) = ${fmt(ev.nd)} + ${this.eps !== 1 ? this.eps.toFixed(1) + '×' : ''}${fmt(ev.hv)} = ${fmt(ev.key)}` : ''}`);
+        const p = logDecimals(ev.du, ev.w, ev.nd, ev.old);     // 精度自适应：加数之和要等于显示的和，比较关系要与真实一致
+        const raw = `精确值：${ev.du.toFixed(4)} + ${ev.w.toFixed(4)} = ${ev.nd.toFixed(4)}，原 d(v) = ${ev.old === Infinity ? '∞' : ev.old.toFixed(4)}`;
+        this.addLog(`<span title="${raw}">松弛 (#${ev.u}→#${ev.v})：${fmt(ev.du, p)} + ${fmt(ev.w, p)} = ${fmt(ev.nd, p)} ${ev.improved ? `&lt; ${fmt(ev.old, p)} ⇒ 更新 d(v)，入队` : `≥ ${fmt(ev.old, p)} ⇒ 不更新`}${this.h && ev.improved ? `；f(v) = ${fmt(ev.nd, p)} + ${this.eps !== 1 ? this.eps.toFixed(1) + '×' : ''}${fmt(ev.hv, p)} = ${fmt(ev.key, p)}` : ''}</span>`);
         break;
-      case 'meet':
+      }
+      case 'meet': {
+        const p = logDecimals(ev.dF, ev.dB, ev.mu, st.mu);
         st.mu = ev.mu; st.meet = ev.u;
-        this.addLog(`两侧在 #${ev.u} 相遇：候选 μ = d_f + d_b = ${fmt(ev.dF)} + ${fmt(ev.dB)} = <b>${fmt(ev.mu)}</b>`);
+        this.addLog(`两侧在 #${ev.u} 相遇：候选 μ = d_f + d_b = ${fmt(ev.dF, p)} + ${fmt(ev.dB, p)} = <b>${fmt(ev.mu, p)}</b>${ev.onSettle ? '（弹出时发现另一侧已触达）' : ''}`);
         break;
-      case 'stop':
+      }
+      case 'stop': {
         st.stopped = true; st.topF = ev.topF; st.topB = ev.topB;
-        this.addLog(`终止条件成立：min Q_f + min Q_b = ${fmt(ev.topF)} + ${fmt(ev.topB)} ≥ μ = ${fmt(ev.mu)}，再搜下去不可能更短。`);
+        const p = logDecimals(ev.topF, ev.topB, ev.topF + ev.topB, ev.mu);
+        this.addLog(`终止条件成立：min Q_f + min Q_b = ${fmt(ev.topF, p)} + ${fmt(ev.topB, p)} = ${fmt(ev.topF + ev.topB, p)} ≥ μ = ${fmt(ev.mu, p)}，再搜下去不可能更短。`);
         break;
+      }
       case 'done':
-        st.path = ev.path; st.cost = ev.cost; st.nS = ev.nS; st.nR = ev.nR; st.finished = true;
-        this.addLog(`<b>完成</b>：最短耗时 ${fmt(ev.cost)} min，路径 ${ev.path.length} 个节点；共确定 ${ev.nS} 个节点、松弛 ${ev.nR} 次。`);
+        st.path = ev.path; st.cost = ev.cost; st.nS = ev.nS; st.nU = ev.nU; st.nR = ev.nR; st.finished = true;
+        this.addLog(`<b>完成</b>：最短耗时 ${fmt(ev.cost)} min，路径 ${ev.path.length} 个节点；展开 ${ev.nS} 次${ev.nU != null && ev.nU !== ev.nS ? `（唯一路口 ${ev.nU} 个）` : ''}、松弛 ${ev.nR} 次。`);
         break;
     }
   }
@@ -241,6 +248,7 @@ function setupBidir() {
       const cond = st.topF + st.topB;
       $('bi-stats').innerHTML = statsHTML([
         ['正向已确定', nf, 'f'], ['反向已确定', nb, 'b'],
+        ['展开次数（两侧合计）', st.nS], ['唯一确定路口', st.nU || nf + nb - 0, 'muted'],
         ['Dijkstra 需确定', ref.dj.nS, 'muted'], ['松弛次数', st.nR],
         ['当前 μ', fmt(st.mu) + (st.mu < Infinity ? ' min' : '')],
         ['min Q_f + min Q_b', `${fmt(st.topF)} + ${fmt(st.topB)} = ${fmt(cond)}`],
@@ -476,21 +484,41 @@ function setupCompare() {
     const rows = [];
     const time = fn => { const t0 = performance.now(); const r = fn(); return [r, performance.now() - t0]; };
     let [dj, tdj] = time(() => runGen(dijkstraGen(g, s, t)));
-    rows.push(['Dijkstra', '无', dj.nS, dj.nR, dj.cost, tdj]);
+    rows.push(['Dijkstra', '无', dj.nS, dj.nR, dj.cost, tdj, dj.nU]);
     let [as, tas] = time(() => runGen(dijkstraGen(g, s, t, { h: euclidTimeHeuristic(g, t) })));
-    rows.push(['A*（欧氏/最高限速）', '无', as.nS, as.nR, as.cost, tas]);
+    rows.push(['A*（欧氏/最高限速）', '无', as.nS, as.nR, as.cost, tas, as.nU]);
     let [bi, tbi] = time(() => runGen(bidirGen(g, s, t)));
-    rows.push(['双向 Dijkstra', '无', bi.nS, bi.nR, bi.cost, tbi]);
+    rows.push(['双向 Dijkstra', '无', bi.nS, bi.nR, bi.cost, tbi, bi.nU]);
     const alt = getALT(4);
     let [al, tal] = time(() => runGen(dijkstraGen(g, s, t, { h: altHeuristic(alt, t) })));
-    rows.push(['ALT（4 个地标）', '4 次全图 Dijkstra，存 4×|V| 个距离', al.nS, al.nR, al.cost, tal]);
+    rows.push(['ALT（4 个地标）', '4 次全图 Dijkstra，存 4×|V| 个距离', al.nS, al.nR, al.cost, tal, al.nU]);
+    const [tAlt] = [0];
     const [ch, tpre] = time(() => new CH(g).preprocess());
     let [cq, tcq] = time(() => runGen(ch.queryGen(s, t)));
-    rows.push(['CH 收缩层次', `收缩 ${g.nodes.length} 个节点，加 ${ch.nShortcuts} 条捷径（${tpre.toFixed(0)} ms）`, cq.nS, cq.nR, cq.cost, tcq]);
+    rows.push(['CH 收缩层次', `收缩 ${g.nodes.length} 个节点，加 ${ch.nShortcuts} 条捷径（${tpre.toFixed(0)} ms）`, cq.nS, cq.nR, cq.cost, tcq, cq.nU]);
+    /* 口径说明：展开次数 = 从队列弹出并确定的次数（双向/CH 同一路口可能两侧各算一次）；唯一路口 = 被任一方向确定过的不同路口数 */
+    const uniq = r => r[6] != null ? r[6] : r[2];
     const maxS = Math.max(...rows.map(r => r[2]));
-    $('cmp-table').innerHTML = `<table><thead><tr><th>算法</th><th>预处理</th><th>确定节点数</th><th>松弛次数</th><th>路径耗时</th><th>相对 Dijkstra</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${r[0]}</td><td class="muted">${r[1]}</td><td><div class="bar"><i style="width:${(r[2] / maxS * 100).toFixed(0)}%"></i><span>${r[2]}</span></div></td><td>${r[3]}</td><td>${fmt(r[4])} min</td><td>${(r[2] / dj.nS * 100).toFixed(0)}% 的搜索量</td></tr>`).join('') +
-      `</tbody></table><p class="muted small">起点 #${s} → 终点 #${t}，所有算法算出的最短耗时一致（${fmt(dj.cost)} min）才算正确。本页路网仅 ${g.nodes.length} 个节点，毫秒级耗时噪声大，所以只比"确定节点数"这种与硬件无关的指标。</p>`;
+    /* 30 组随机起终点上的平均每次查询耗时（ms），用于"预处理值不值"的收支平衡估算 */
+    const rnd = mulberry32(g.seed + 99), Q = [];
+    while (Q.length < 30) { const a = Math.floor(rnd() * g.nodes.length), b = Math.floor(rnd() * g.nodes.length); if (a !== b) Q.push([a, b]); }
+    const avgMs = fn => { const t0 = performance.now(); for (const [a, b] of Q) fn(a, b); return (performance.now() - t0) / Q.length; };
+    const msDj = avgMs((a, b) => runGen(dijkstraGen(g, a, b)));
+    const msAs = avgMs((a, b) => runGen(dijkstraGen(g, a, b, { h: euclidTimeHeuristic(g, b) })));
+    const msBi = avgMs((a, b) => runGen(bidirGen(g, a, b)));
+    const t0a = performance.now(); const alt2 = computeLandmarks(g, 4); const preAlt = performance.now() - t0a;
+    const msAl = avgMs((a, b) => runGen(dijkstraGen(g, a, b, { h: altHeuristic(alt2, b) })));
+    const msCh = avgMs((a, b) => runGen(ch.queryGen(a, b)));
+    const extra = {
+      'Dijkstra': ['—', '—', msDj, '—'],
+      'A*（欧氏/最高限速）': ['—', '—', msAs, '—'],
+      '双向 Dijkstra': ['—', '—', msBi, '—'],
+      'ALT（4 个地标）': [preAlt, `${4 * g.nodes.length} 个距离（${(4 * g.nodes.length * 8 / 1024).toFixed(0)} KB）`, msAl, msDj > msAl ? Math.ceil(preAlt / (msDj - msAl)) + ' 次' : '永不（单次没省到时间）'],
+      'CH 收缩层次': [tpre, `${ch.nShortcuts} 条捷径（约 ${(ch.nShortcuts * 24 / 1024).toFixed(0)} KB）`, msCh, msDj > msCh ? Math.ceil(tpre / (msDj - msCh)) + ' 次' : '永不'],
+    };
+    $('cmp-table').innerHTML = `<table><thead><tr><th>算法</th><th>展开次数</th><th>唯一确定路口</th><th>松弛次数</th><th>路径耗时</th><th>相对 Dijkstra</th><th>预处理耗时</th><th>额外存储</th><th>每次查询 ms<br><span class="muted">(30 组随机平均)</span></th><th>收支平衡<br><span class="muted">(查几次回本)</span></th></tr></thead><tbody>` +
+      rows.map(r => { const x = extra[r[0]]; return `<tr><td>${r[0]}</td><td><div class="bar"><i style="width:${(r[2] / maxS * 100).toFixed(0)}%"></i><span>${r[2]}</span></div></td><td>${uniq(r)}</td><td>${r[3]}</td><td>${fmt(r[4])} min</td><td>${(r[2] / dj.nS * 100).toFixed(0)}%</td><td>${typeof x[0] === 'number' ? x[0].toFixed(0) + ' ms' : x[0]}</td><td class="small">${x[1]}</td><td>${x[2].toFixed(3)}</td><td>${x[3]}</td></tr>`; }).join('') +
+      `</tbody></table><p class="muted small">起点 #${s} → 终点 #${t}，所有算法算出的最短耗时一致（${fmt(dj.cost)} min）才算正确。<b>口径</b>：展开次数 = 从队列弹出并确定的次数（双向/CH 同一路口可能两侧各计一次）；唯一确定路口 = 被任一方向确定过的不同路口数。本页路网仅 ${g.nodes.length} 个节点，毫秒级耗时噪声很大（同一机器前后两次可差一倍），"收支平衡"只看数量级：预处理一次的时间除以每次查询省下的时间，就是查多少次才回本。</p>`;
   };
 }
 

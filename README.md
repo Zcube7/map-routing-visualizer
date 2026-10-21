@@ -28,6 +28,10 @@ math behind each step. Pure front-end, no build step, works offline.
 | **Read the route like a map app** | Fastest route + alternatives, "via …" roads, turn-by-turn steps, ETA; press **开始** to simulate driving with a follow camera. |
 | **Compare algorithms** | Nodes settled, relaxations, % of Dijkstra's search, μ for bidirectional, shortcut unpacking for CH; the key formula of each algorithm is rendered with KaTeX. |
 | **Traffic by time of day** | Time-dependent mode colours every road by its speed at the chosen departure time and reroutes around rush-hour congestion. |
+| **Guided cases / 引导案例** | Four scripted scenarios that pause the animation at the decisive moment and explain it in place: *shorter distance but longer time*, *why bidirectional search cannot stop at the first meeting* (the first meeting point is shown to be off the final route), *why CH's one-off preprocessing pays for itself* (measured break-even on 30 random queries), and *where the optimal path comes from* (slow-motion `prev`-pointer trace-back). |
+| **Side-by-side comparison** | Pick a second algorithm; both run in lockstep (one settle each) on two synced map views, so you compare search areas at the same number of expansions. |
+| **Honest metrics** | Stats distinguish *expansions* (queue pops; bidirectional/CH may count a junction twice) from *unique junctions*; the metrics table adds preprocessing time, extra storage and break-even query count for ALT and CH. Log lines pick their decimal places so that "a + b = c < d" is never contradicted by rounding. |
+| **Room for the map** | Collapsible route panel and algorithm card, a "简洁观察 / 详细推导" density toggle, automatic fit of the route into the unobscured area, keyboard control (Tab/arrow keys in inputs and buttons, Space = play/pause, `.` = step, Esc = close). |
 
 Measured on the default query (Piazza del Duomo → Stazione Centrale, all six algorithms agree on 8.0 min):
 
@@ -49,14 +53,22 @@ Or serve the folder:
 python -m http.server 8765      # then open http://localhost:8765/map.html
 ```
 
-Self-check (five algorithms must agree on 120 random queries across three random networks; CH
-unpacked path cost must equal μ; heuristics must be consistent; time-dependent weights must be FIFO):
+Tests:
 
 ```bash
-npm test        # = node test/check.js
+npm test                 # unit + browser
+npm run test:unit        # node test/check.js — synthetic networks (120 random queries, 5 algorithms agree; CH unpacked
+                         #   cost = μ; heuristic consistency; FIFO), Milan regression (fixed query, expansion counts per
+                         #   algorithm), edge cases (same point, unreachable, landmarks in another component), display precision
+npm run test:browser     # node test/browser.js — headless Chrome/Edge runs map.html?selftest=1 through
+                         #   pick points → every algorithm → reset → street search → side-by-side → all guided cases
 ```
 
-URL parameters for map mode: `?algo=astar|bidir|alt|ch|td&instant=1&zoom=1.8&hour=18`.
+URL parameters for map mode: `?algo=astar|bidir|alt|ch|td&instant=1&zoom=1.8&hour=18&case=bidir-first-meet`.
+
+Measured on this laptop (Chrome, 1440×900): data script 124 ms, graph build 40–50 ms, first base-map render
+25–40 ms, drag frame 5 ms (cached transform), algorithm switch with instant result 130 ms, CH preprocessing of
+4 704 junctions 0.7–1.5 s. No bottleneck that would justify a Web Worker or a spatial index yet.
 
 ## Tutorial chapters / 教程章节
 
